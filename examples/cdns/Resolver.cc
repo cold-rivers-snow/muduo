@@ -79,8 +79,16 @@ bool Resolver::resolve(StringArg hostname, const Callback& cb)
 {
   loop_->assertInLoopThread();
   QueryData* queryData = new QueryData(this, cb);
+#if ARES_VERSION >= 0x010500
+  struct ares_addrinfo_hints hints = {};
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  ares_getaddrinfo(ctx_, hostname.c_str(), NULL, &hints,
+                   &Resolver::ares_addrinfo_callback, queryData);
+#else
   ares_gethostbyname(ctx_, hostname.c_str(), AF_INET,
       &Resolver::ares_host_callback, queryData);
+#endif
   struct timeval tv;
   struct timeval* tvp = ares_timeout(ctx_, NULL, &tv);
   double timeout = getSeconds(tvp);
@@ -185,6 +193,51 @@ void Resolver::ares_host_callback(void* data, int status, int timeouts, struct h
   query->owner->onQueryResult(status, hostent, query->callback);
   delete query;
 }
+
+#if ARES_VERSION >= 0x010500
+void Resolver::ares_addrinfo_callback(void* data, int status, int timeouts, struct ares_addrinfo* res)
+{
+  QueryData* query = static_cast<QueryData*>(data);
+  query->owner->onQueryResult(status, res, query->callback);
+  delete query;
+}
+
+void Resolver::onQueryResult(int status, struct ares_addrinfo* result, const Callback& callback)
+{
+  LOG_DEBUG << "onQueryResult " << status;
+  struct sockaddr_in addr;
+  memZero(&addr, sizeof addr);
+  addr.sin_family = AF_INET;
+  addr.sin_port = 0;
+
+  if (status == ARES_SUCCESS && result)
+  {
+    for (struct ares_addrinfo_node* node = result->nodes; node; node = node->ai_next)
+    {
+      if (node->ai_family == AF_INET)
+      {
+        struct sockaddr_in* ipv4 = reinterpret_cast<struct sockaddr_in*>(node->ai_addr);
+        addr.sin_addr = ipv4->sin_addr;
+        if (kDebug)
+        {
+          char buf[32];
+          inet_ntop(AF_INET, &addr.sin_addr, buf, sizeof buf);
+          printf("  %s\n", buf);
+        }
+        break; // Just take the first one
+      }
+    }
+  }
+
+  if (result)
+  {
+    ares_freeaddrinfo(result);
+  }
+
+  InetAddress inet(addr);
+  callback(inet);
+}
+#endif
 
 int Resolver::ares_sock_create_callback(int sockfd, int type, void* data)
 {
