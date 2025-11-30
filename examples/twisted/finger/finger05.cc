@@ -23,3 +23,7 @@ int main()
   server.start();
   loop.loop();
 }
+
+//printf "msg\r\n" | nc 127.0.0.1 1079
+
+//telnet 127.0.0.1 1079
